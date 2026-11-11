@@ -1,0 +1,17 @@
+---
+# Benchmarks inherit the root config. Disabled here only:
+#   avoid-non-const-global-variables, cert-err58-cpp
+#       BENCHMARK() registers cases through static globals.
+#   readability-identifier-naming
+#       Google Benchmark convention is BM_CamelCase function names.
+#   misc-const-correctness, clang-analyzer-deadcode.DeadStores
+#       Both fire on the canonical `for (auto _ : state)` loop, whose
+#       iterator value is intentionally unused.
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cert-err58-cpp,
+  -readability-identifier-naming,
+  -misc-const-correctness,
+  -clang-analyzer-deadcode.DeadStores
+...

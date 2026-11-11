@@ -1,0 +1,59 @@
+---
+# Broad check families, with the noisy-but-low-value checks turned off.
+# Each disabled check has a reason; anything not listed here is enforced as an error.
+Checks: >
+  bugprone-*,
+  cert-*,
+  clang-analyzer-*,
+  concurrency-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -readability-magic-numbers,
+  -cppcoreguidelines-pro-bounds-constant-array-index,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-non-private-member-variables-in-classes,
+  -misc-non-private-member-variables-in-classes,
+  -misc-include-cleaner,
+  -modernize-use-trailing-return-type,
+  -readability-identifier-length,
+  -readability-function-cognitive-complexity,
+  -portability-avoid-pragma-once
+
+# Rationale for the disabled checks:
+#   easily-swappable-parameters  -> addressed with strong types (Price, Qty, OrderId) instead
+#   magic-numbers                -> tick/band constants in tests and benchmarks are clearer inline
+#   pro-bounds-*                 -> pools/arrays are indexed by validated indices on the hot path;
+#                                   bounds are enforced by asserts + sanitizer builds
+#   non-private-member-variables -> plain aggregates (events, Order) are intentional PODs
+#   include-cleaner              -> too noisy with GoogleTest/Benchmark umbrella headers
+#   trailing-return-type         -> style preference, not a correctness check
+#   identifier-length            -> `id`, `px`, `qty` are domain-standard names
+#   cognitive-complexity         -> the matching loop is inherently branchy; reviewed by hand
+#   avoid-pragma-once            -> supported by every compiler we target (GCC, Clang, MSVC)
+
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/(include|reference|tests|bench|tools)/.*'
+FormatStyle: file
+
+CheckOptions:
+  - { key: readability-identifier-naming.NamespaceCase,          value: lower_case }
+  - { key: readability-identifier-naming.ClassCase,              value: CamelCase }
+  - { key: readability-identifier-naming.StructCase,             value: CamelCase }
+  - { key: readability-identifier-naming.EnumCase,               value: CamelCase }
+  - { key: readability-identifier-naming.EnumConstantCase,       value: CamelCase }
+  - { key: readability-identifier-naming.TemplateParameterCase,  value: CamelCase }
+  - { key: readability-identifier-naming.FunctionCase,           value: lower_case }
+  - { key: readability-identifier-naming.VariableCase,           value: lower_case }
+  - { key: readability-identifier-naming.ParameterCase,          value: lower_case }
+  - { key: readability-identifier-naming.PrivateMemberSuffix,    value: _ }
+  - { key: readability-identifier-naming.ProtectedMemberSuffix,  value: _ }
+  - { key: readability-identifier-naming.ConstexprVariableCase,  value: CamelCase }
+  - { key: readability-identifier-naming.ConstexprVariablePrefix, value: k }
+  - { key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor, value: true }
+...

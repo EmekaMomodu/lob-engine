@@ -1,0 +1,11 @@
+/build/
+/out/
+/.cache/
+compile_commands.json
+.DS_Store
+*.swp
+.idea/
+.vscode/
+# raw benchmark dumps; curated results live in docs/results/
+/bench-results/
+perf.data*
