@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Keep in sync with the local LLVM major (clang-format output differs between majors).
+  LLVM_VERSION: "23"
+
+jobs:
+  lint:
+    name: clang-format + clang-tidy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install LLVM ${{ env.LLVM_VERSION }}
+        run: |
+          wget -qO llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh "$LLVM_VERSION"
+          sudo apt-get install -y "clang-format-$LLVM_VERSION" "clang-tidy-$LLVM_VERSION" ninja-build
+
+      - name: clang-format
+        run: git ls-files '*.cpp' '*.hpp' | xargs "clang-format-$LLVM_VERSION" --dry-run --Werror
+
+      - name: clang-tidy
+        env:
+          CC: clang-${{ env.LLVM_VERSION }}
+          CXX: clang++-${{ env.LLVM_VERSION }}
+        run: |
+          cmake --preset tidy -DLOB_CLANG_TIDY_EXE="$(command -v clang-tidy-$LLVM_VERSION)"
+          cmake --build --preset tidy
+
+  build-test:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }} / ${{ matrix.preset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, compiler: gcc-14,      cc: gcc-14,   cxx: g++-14,     preset: release }
+          - { os: ubuntu-24.04, compiler: gcc-14,      cc: gcc-14,   cxx: g++-14,     preset: asan-ubsan }
+          - { os: ubuntu-24.04, compiler: clang-18,    cc: clang-18, cxx: clang++-18, preset: release }
+          - { os: ubuntu-24.04, compiler: clang-18,    cc: clang-18, cxx: clang++-18, preset: asan-ubsan }
+          - { os: macos-15,     compiler: apple-clang, cc: clang,    cxx: clang++,    preset: release }
+          - { os: macos-15,     compiler: apple-clang, cc: clang,    cxx: clang++,    preset: asan-ubsan }
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build g++-14
+
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # Newer kernels use 32 bits of mmap ASLR entropy, which collides with
+      # ASan's shadow memory layout and causes spurious DEADLYSIGNAL crashes.
+      - name: Reduce ASLR entropy for ASan
+        if: runner.os == 'Linux' && matrix.preset == 'asan-ubsan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Unit + differential tests
+        run: ctest --preset ${{ matrix.preset }} --label-exclude bench
+
+      # Proves every benchmark builds and runs. CI runners are shared and noisy,
+      # so these timings are never reported as results.
+      - name: Benchmark smoke test
+        run: ctest --preset ${{ matrix.preset }} --label-regex bench
