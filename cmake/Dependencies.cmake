@@ -32,4 +32,14 @@ if(LOB_BUILD_BENCHMARKS)
   set(BENCHMARK_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
   set(BENCHMARK_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(benchmark)
+
+  # Google Benchmark builds its own sources with -pedantic-errors, and LLVM >= 23
+  # reports the __COUNTER__ macro in benchmark.h as a C2y extension, which breaks
+  # the dependency's build. Silence only that diagnostic, only on its targets.
+  include(CheckCXXCompilerFlag)
+  check_cxx_compiler_flag(-Wno-c2y-extensions LOB_HAS_WNO_C2Y_EXTENSIONS)
+  if(LOB_HAS_WNO_C2Y_EXTENSIONS)
+    target_compile_options(benchmark PRIVATE -Wno-c2y-extensions)
+    target_compile_options(benchmark_main PRIVATE -Wno-c2y-extensions)
+  endif()
 endif()
