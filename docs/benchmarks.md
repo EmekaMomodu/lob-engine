@@ -272,3 +272,156 @@ cmake --preset release-native && cmake --build --preset release-native --target 
 Headline numbers belong on a bare-metal x86-64 Linux machine with an
 isolated core. The harness pins the thread (`--cpu`) and uses `rdtsc` there;
 nothing in this file was measured on such a machine.
+
+## M6: profiling pass, hotspots and fixes (2026-11-12)
+
+### Tooling
+
+- **Profiler:** macOS `sample` (statistical, 1 ms) on a `relwithdebinfo`
+  build (`-O3 -g -fno-omit-frame-pointer`). Xcode's `xctrace` wasn't on the
+  developer path.
+- **Process being profiled:** `lob_latency --mode throughput`. This mode has
+  no per-op timestamps, so the profile isn't distorted by `isb`.
+- **Raw profiles:** [before](results/m6/before_sample_array_realistic.txt),
+  [after](results/m6/after_sample_array_realistic.txt).
+- **Method:** every change was measured with **interleaved A/B runs**.
+  Separate binaries for each variant run alternately (A, B, C, A, B, C, …)
+  for 4 rounds × 5 runs, so session drift hits all of them equally. Raw data
+  and scripts are in [results/m6/ab/](results/m6/ab/).
+
+### Methodology lesson: a single before/after comparison misled
+
+The first "after" run for change A showed design B going from 20.6 to
+18.6 ns/cmd (−10%). The interleaved comparison of the same two binaries
+showed −1.4%. Most of the apparent gain was session drift, of the same kind
+seen between M3 and M4. From here on, every number in this section comes from
+interleaved runs.
+
+### Profile before (design B, realistic workload; share of 8,341 samples)
+
+| Share | Function |
+|---:|---|
+| 26.1% | `match` (matching loop) |
+| 14.7% | `submit` |
+| 12.7% | cancel handler (inlined into `std::visit` dispatch) |
+| 9.1% | `remove` (unlink + id erase + pool release) |
+| 6.7% | new-order dispatch |
+| 6.7% | `modify` |
+| 3.3% | `ArrayLevels::get_or_insert` |
+| 3.1% | `IdMap::insert` |
+
+A function-level profile doesn't say *why* `match`, `submit` and cancel are
+expensive. Each of them touches the id map, so the id map was the first
+hypothesis.
+
+### Hypothesis 1: the id map's memory footprint (confirmed)
+
+With `max_orders = 1M`, the old id map had 2M slots of 16 B (33.6 MB), and
+its hash scattered even the ~2,600 live orders across all of it. Experiment:
+the same command stream, engines built with smaller capacity (so a smaller
+table), live orders unchanged.
+
+| max_orders (id table) | design A | design B |
+|---|---:|---:|
+| 1,048,576 (33.6 MB) | 24.5 | 19.3 |
+| 65,536 (2.1 MB) | 21.9 | 15.5 |
+| 16,384 (0.5 MB) | 23.4 | 16.9 |
+
+ns/cmd, median of 9. A **19% throughput difference from table size alone.**
+The table's cache footprint, not its algorithm, was the top cost.
+
+### Changes, each measured (interleaved, 20 runs per cell, ns/cmd median)
+
+| Change | Design B realistic | Design B thin | Design A realistic | Design A thin |
+|---|---:|---:|---:|---:|
+| baseline | 19.08 | 19.81 | 24.43 | 29.65 |
+| **A** single-probe insert/erase | −1.5% | −2.8% | −1.5% | −1.2% |
+| **A+B** + Fibonacci hash | −3.1% | −4.0% | −3.6% | −3.4% |
+| **A+B+C** + index-only slots | **13.46 (−29.4%)** | **14.92 (−24.7%)** | **19.98 (−18.2%)** | **26.06 (−12.1%)** |
+
+The spread (max − min over median) was 3–5% for every final cell.
+
+- **A. Single probe.** `IdMap::probe` returns either the slot holding the id
+  or the empty slot where it would go.
+  - Cancel and modify erase that slot directly instead of re-probing.
+  - A passive add inserts into the slot found by its own duplicate check.
+    This is only safe when matching erased nothing in between, because a
+    backward-shift erase can move entries. The engine therefore reuses the
+    slot only when the order didn't trade.
+  - Small, consistent gain.
+- **B. Fibonacci hashing.** `(key × 2^64/φ) >> (64 − log2 capacity)`, one
+  multiply, replacing murmur3's `fmix64` (two multiplies, three shift-xors)
+  on the critical path of every map access. Small, consistent gain.
+- **C. Index-only slots.** A slot now holds just the 4-byte pool index; key
+  comparisons read the id from `orders_[index].id` through a statically
+  dispatched `key_of` callable.
+  - The table is 4× smaller (8.4 MB at 1M capacity), with 16 slots per cache
+    line.
+  - A hit costs no extra memory access, because the caller reads that
+    order's cache line next anyway.
+  - A miss usually lands on an empty slot without touching any order.
+  - This is the big one.
+
+**Capacity sensitivity after the changes.** This is the same experiment as
+in Hypothesis 1, rerun with the new map:
+
+| max_orders | design A before → after | design B before → after |
+|---|---|---|
+| 1,048,576 | 24.5 → 20.3 | 19.3 → 13.9 |
+| 65,536 | 21.9 → 20.2 | 15.5 → 13.6 |
+| 16,384 | 23.4 → 20.4 | 16.9 → 13.9 |
+
+Throughput no longer depends on capacity, and at every size the new map
+beats the old map at its best size. So C isn't only about footprint: a
+smaller table also keeps a probe within one cache line that the operation
+shares with work it does anyway.
+
+Correctness: after each change the full test suite passed, and so did the
+differential fuzzer (28.8M commands per change, all three engines, all
+configs). The final code then matched the reference on a fresh campaign of
+**300,000,000 commands** (seeds 101–125, 100M per engine).
+
+### Profile after (share of 3,697 samples)
+
+| Share | Function |
+|---:|---|
+| 31.0% | `match` |
+| 13.4% | cancel handler (inlined) |
+| 11.8% | `submit` |
+| 8.7% | `remove` |
+| 8.3% | new-order dispatch |
+| 7.8% | `modify` |
+
+`IdMap::insert` has dropped out of the top entries. The matching loop is now
+the clear top cost. Remaining candidates, not attempted (each would need the
+same A/B treatment):
+- per-fill bookkeeping: three sink calls and an id-map erase per fill;
+- prefetching the next resting order in a level while filling the current
+  one;
+- a structure-of-arrays split of `Order` so the fill loop touches only
+  `leaves`/`next`.
+
+### Before vs. after, full M5 measurement (same settings, same harness)
+
+[M5 raw](results/m5_latency_apple_m4max.json) ·
+[M6 raw](results/m6/after_latency_apple_m4max.json). Throughput is
+block-timed (median of 5). Latency is per-op over 10M commands and includes
+~11 ns of timer overhead; percentiles are quantized to the 42 ns clock step.
+
+| Book / workload | throughput M5 → M6 | mean latency M5 → M6 | p99 M5 → M6 | p99.9 M5 → M6 |
+|---|---|---|---|---|
+| Design B / realistic | 18.9 → **13.3 ns** (75 M cmd/s) | 42.0 → 24.9 | 125 → 42 | 167 → 84 |
+| Design B / thin | 19.8 → **14.8 ns** (68 M cmd/s) | 40.4 → 24.3 | 125 → 42 | 167 → 84 |
+| Design A / realistic | 24.2 → 19.5 ns | 47.2 → 29.4 | 125 → 83 | 167 → 84 |
+| Design A / thin | 29.8 → 25.8 ns | 49.4 → 34.1 | 125 → 84 | 167 → 125 |
+| Reference / realistic | 53.4 → 53.3 ns | 65.7 → 62.7 | 167 → 167 | 251 → 251 |
+
+The reference book doesn't use the engine's id map, and it's unchanged
+within noise, which is a useful control. Maxima are still 14–52 µs for every
+book, including the reference (OS noise; see M5).
+
+One anomaly is left unexplained: in the M6 run, the linear-scan variant's
+passive-limit p99 was 125 ns against 42 ns for the bitmap variant (and one
+520 µs maximum). Passive adds never trigger a next-best search, so this is
+most likely run-level noise (a run landing on a busy core). It isn't
+attributed to the scan.

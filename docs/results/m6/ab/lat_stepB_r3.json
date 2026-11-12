@@ -1,0 +1,18 @@
+{
+  "clock": "cntvct_el0 (isb-fenced)",
+  "ns_per_tick": 1,
+  "effective_resolution_ns": 42,
+  "timer_overhead_ns": {"mean": 8.64264, "p50": 0, "p99": 42},
+  "thread_placement": "macOS: no hard affinity; QoS USER_INTERACTIVE (P-cores)",
+  "ops": 2000000, "warmup": 200000, "runs": 5, "seed": 42,
+  "results": [
+    {"engine": "map", "workload": "realistic", "avg_live_orders": 2624, "final_levels": 89, "throughput_ns_per_op_median": 23.5814, "throughput_ns_per_op_runs": [23.6722, 23.445, 23.5814, 23.6901, 23.2542],
+     "latency_ns": {}},
+    {"engine": "array", "workload": "realistic", "avg_live_orders": 2624, "final_levels": 89, "throughput_ns_per_op_median": 18.4941, "throughput_ns_per_op_runs": [18.4935, 18.5131, 18.4533, 18.4941, 18.8924],
+     "latency_ns": {}},
+    {"engine": "map", "workload": "thin", "avg_live_orders": 430, "final_levels": 167, "throughput_ns_per_op_median": 28.8126, "throughput_ns_per_op_runs": [28.8126, 28.8934, 29.3591, 28.732, 28.5226],
+     "latency_ns": {}},
+    {"engine": "array", "workload": "thin", "avg_live_orders": 430, "final_levels": 167, "throughput_ns_per_op_median": 19.1912, "throughput_ns_per_op_runs": [19.1912, 19.0241, 19.0245, 19.3197, 19.9071],
+     "latency_ns": {}}
+  ]
+}

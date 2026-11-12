@@ -22,7 +22,7 @@ inline constexpr std::uint32_t kNil = std::numeric_limits<std::uint32_t>::max();
 /// what would otherwise be padding.
 ///
 ///   offset  size  field
-///        0     8  id
+///        0     8  id       also the id map's key (IdMap stores only indices)
 ///        8     4  leaves   open quantity
 ///       12     4  total    total order quantity incl. filled (modify semantics)
 ///       16     4  prev     previous order at the same level (kNil = head)
