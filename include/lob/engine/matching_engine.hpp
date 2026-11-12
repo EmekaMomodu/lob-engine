@@ -64,7 +64,8 @@ public:
         if (is_limit && !in_band(cmd.price)) {
             return reject(cmd.id, RejectReason::PriceOutOfBand);
         }
-        if (ids_.find(cmd.id) != kNil) {
+        const IdMap::Probe probe = ids_.probe(cmd.id, key_of());
+        if (probe.found) {
             return reject(cmd.id, RejectReason::DuplicateOrderId);
         }
         if (is_limit && orders_.live() >= config_.max_orders) {
@@ -95,27 +96,35 @@ public:
             order.leaves = aggressor.leaves;
             order.total = qty;
             order.side = cmd.side;
-            ids_.insert(cmd.id, index);
+            // If nothing traded, matching erased nothing from the id map, so
+            // the empty slot found by the duplicate check is still valid.
+            if (aggressor.leaves == qty) {
+                ids_.insert_at(probe.slot, index);
+            } else {
+                ids_.insert(cmd.id, index, key_of());
+            }
             link_back(levels_.get_or_insert(cmd.side, cmd.price), index);
         }
     }
 
     void cancel(const Cancel& cmd) {
-        const std::uint32_t index = ids_.find(cmd.id);
-        if (index == kNil) {
+        const IdMap::Probe probe = ids_.probe(cmd.id, key_of());
+        if (!probe.found) {
             return reject(cmd.id, RejectReason::UnknownOrderId);
         }
+        const std::uint32_t index = ids_.value_at(probe.slot);
         const Qty leaves = to_qty(orders_[index].leaves);
-        remove(index);
+        remove(index, probe.slot);
         sink_->on(Cancelled{.id = cmd.id, .leaves = leaves, .reason = CancelReason::UserRequested});
     }
 
     void modify(const Modify& cmd) {
         // Validation order (must match the reference): unknown id, quantity, price.
-        const std::uint32_t index = ids_.find(cmd.id);
-        if (index == kNil) {
+        const IdMap::Probe probe = ids_.probe(cmd.id, key_of());
+        if (!probe.found) {
             return reject(cmd.id, RejectReason::UnknownOrderId);
         }
+        const std::uint32_t index = ids_.value_at(probe.slot);
         if (cmd.qty < Qty{0} || cmd.qty > kMaxOrderQty) {
             return reject(cmd.id, RejectReason::InvalidQuantity);
         }
@@ -129,7 +138,7 @@ public:
 
         if (new_total <= filled) {
             const Qty leaves = to_qty(order.leaves);
-            remove(index);
+            remove(index, probe.slot);
             sink_->on(
                 Cancelled{.id = cmd.id, .leaves = leaves, .reason = CancelReason::ReducedToFilled});
             return;
@@ -163,7 +172,7 @@ public:
         Aggressor aggressor{.id = order.id, .side = order.side, .leaves = new_leaves};
         match(aggressor, cmd.price);
         if (aggressor.leaves == 0) {
-            ids_.erase(cmd.id);
+            ids_.erase(cmd.id, key_of());
             orders_.release(index);
             return;
         }
@@ -229,6 +238,11 @@ private:
         return config;
     }
 
+    /// The id map stores only pool indices; it reads keys back from the pool.
+    [[nodiscard]] auto key_of() const noexcept {
+        return [this](std::uint32_t index) noexcept { return orders_[index].id.value(); };
+    }
+
     [[nodiscard]] static Qty to_qty(std::uint64_t qty) noexcept {
         return Qty{static_cast<std::int64_t>(qty)};
     }
@@ -277,7 +291,7 @@ private:
                     const OrderId resting_id = resting.id;
                     sink_->on(Filled{.id = resting_id});
                     pop_head(level);
-                    ids_.erase(resting_id);
+                    ids_.erase(resting_id, key_of());
                     orders_.release(index);
                 } else {
                     sink_->on(PartiallyFilled{.id = resting.id, .leaves = to_qty(resting.leaves)});
@@ -351,10 +365,10 @@ private:
     }
 
     /// Remove a resting order entirely (cancel, or modify down to filled).
-    void remove(std::uint32_t index) noexcept {
-        const OrderId id = orders_[index].id;
+    /// `id_slot` is its id-map slot from a probe made in the same command.
+    void remove(std::uint32_t index, std::size_t id_slot) noexcept {
         unlink(orders_[index].level, index);
-        ids_.erase(id);
+        ids_.erase_at(id_slot, key_of());
         orders_.release(index);
     }
 
@@ -406,7 +420,7 @@ private:
             if (order.leaves == 0 || order.leaves > order.total) {
                 return where + "order " + std::to_string(order.id.value()) + " has bad quantities";
             }
-            if (ids_.find(order.id) != i) {
+            if (ids_.find(order.id, key_of()) != i) {
                 return where + "id map does not point at order " + std::to_string(order.id.value());
             }
             total += order.leaves;

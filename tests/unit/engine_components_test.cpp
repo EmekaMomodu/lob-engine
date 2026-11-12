@@ -23,21 +23,71 @@ namespace lob::engine {
 namespace {
 
 // --- IdMap ------------------------------------------------------------------
+//
+// The map stores only values (pool indices) and reads keys back through a
+// key_of(value) callable, exactly as the engine does with its order pool. The
+// tests model the pool as a vector of keys indexed by value.
+
+/// A stand-in for the order pool: value -> key, with a free list of values.
+class KeyTable {
+public:
+    explicit KeyTable(std::size_t capacity) : keys_(capacity) {
+        for (std::size_t i = capacity; i-- > 0;) {
+            free_.push_back(static_cast<std::uint32_t>(i));
+        }
+    }
+    std::uint32_t add(std::uint64_t key) {
+        const std::uint32_t value = free_.back();
+        free_.pop_back();
+        keys_[value] = key;
+        return value;
+    }
+    void release(std::uint32_t value) { free_.push_back(value); }
+    [[nodiscard]] auto key_of() const {
+        return [this](std::uint32_t value) { return keys_[value]; };
+    }
+
+private:
+    std::vector<std::uint64_t> keys_;
+    std::vector<std::uint32_t> free_;
+};
 
 TEST(IdMap, InsertFindErase) {
     IdMap map(8);
-    EXPECT_EQ(map.find(OrderId{1}), kNil);
-    map.insert(OrderId{1}, 10);
-    map.insert(OrderId{0}, 20);           // 0 is a valid id
-    map.insert(OrderId{UINT64_MAX}, 30);  // so is the max value
-    EXPECT_EQ(map.find(OrderId{1}), 10U);
-    EXPECT_EQ(map.find(OrderId{0}), 20U);
-    EXPECT_EQ(map.find(OrderId{UINT64_MAX}), 30U);
+    KeyTable pool(8);
+    const auto key_of = pool.key_of();
+    EXPECT_EQ(map.find(OrderId{1}, key_of), kNil);
+    const std::uint32_t a = pool.add(1);
+    const std::uint32_t b = pool.add(0);           // 0 is a valid id
+    const std::uint32_t c = pool.add(UINT64_MAX);  // so is the max value
+    map.insert(OrderId{1}, a, key_of);
+    map.insert(OrderId{0}, b, key_of);
+    map.insert(OrderId{UINT64_MAX}, c, key_of);
+    EXPECT_EQ(map.find(OrderId{1}, key_of), a);
+    EXPECT_EQ(map.find(OrderId{0}, key_of), b);
+    EXPECT_EQ(map.find(OrderId{UINT64_MAX}, key_of), c);
     EXPECT_EQ(map.size(), 3U);
-    map.erase(OrderId{0});
-    EXPECT_EQ(map.find(OrderId{0}), kNil);
-    EXPECT_EQ(map.find(OrderId{1}), 10U);
+    map.erase(OrderId{0}, key_of);
+    EXPECT_EQ(map.find(OrderId{0}, key_of), kNil);
+    EXPECT_EQ(map.find(OrderId{1}, key_of), a);
     EXPECT_EQ(map.size(), 2U);
+}
+
+TEST(IdMap, ProbeThenInsertAtAndEraseAt) {
+    IdMap map(8);
+    KeyTable pool(8);
+    const auto key_of = pool.key_of();
+    const IdMap::Probe miss = map.probe(OrderId{42}, key_of);
+    ASSERT_FALSE(miss.found);
+    const std::uint32_t v = pool.add(42);
+    map.insert_at(miss.slot, v);
+    const IdMap::Probe hit = map.probe(OrderId{42}, key_of);
+    ASSERT_TRUE(hit.found);
+    EXPECT_EQ(hit.slot, miss.slot);
+    EXPECT_EQ(map.value_at(hit.slot), v);
+    map.erase_at(hit.slot, key_of);
+    EXPECT_FALSE(map.probe(OrderId{42}, key_of).found);
+    EXPECT_EQ(map.size(), 0U);
 }
 
 TEST(IdMap, CapacityIsPowerOfTwoAtLeastTwiceMaxEntries) {
@@ -52,6 +102,8 @@ TEST(IdMap, CapacityIsPowerOfTwoAtLeastTwiceMaxEntries) {
 // can go wrong.
 void fuzz_id_map(std::size_t max_entries, std::uint64_t key_space, std::uint64_t seed) {
     IdMap map(max_entries);
+    KeyTable pool(max_entries);
+    const auto key_of = pool.key_of();
     std::unordered_map<std::uint64_t, std::uint32_t> model;
     std::vector<std::uint64_t> keys;
     workload::Rng rng(seed);
@@ -62,8 +114,8 @@ void fuzz_id_map(std::size_t max_entries, std::uint64_t key_space, std::uint64_t
             if (model.contains(key)) {
                 continue;
             }
-            const auto value = static_cast<std::uint32_t>(rng.below(kNil));
-            map.insert(OrderId{key}, value);
+            const std::uint32_t value = pool.add(key);
+            map.insert(OrderId{key}, value, key_of);
             model.emplace(key, value);
             keys.push_back(key);
         } else {
@@ -71,22 +123,23 @@ void fuzz_id_map(std::size_t max_entries, std::uint64_t key_space, std::uint64_t
             const std::uint64_t key = keys[i];
             keys[i] = keys.back();
             keys.pop_back();
-            map.erase(OrderId{key});
+            map.erase(OrderId{key}, key_of);
+            pool.release(model.at(key));
             model.erase(key);
         }
         // Spot-check a present key and an absent-or-present random key.
         if (!keys.empty()) {
             const std::uint64_t key = keys[rng.below(keys.size())];
-            ASSERT_EQ(map.find(OrderId{key}), model.at(key)) << "step " << step;
+            ASSERT_EQ(map.find(OrderId{key}, key_of), model.at(key)) << "step " << step;
         }
         const std::uint64_t probe = rng.below(key_space);
         const auto it = model.find(probe);
-        ASSERT_EQ(map.find(OrderId{probe}), it == model.end() ? kNil : it->second)
+        ASSERT_EQ(map.find(OrderId{probe}, key_of), it == model.end() ? kNil : it->second)
             << "step " << step;
         ASSERT_EQ(map.size(), model.size());
     }
     for (const auto& [key, value] : model) {
-        ASSERT_EQ(map.find(OrderId{key}), value);
+        ASSERT_EQ(map.find(OrderId{key}, key_of), value);
     }
 }
 

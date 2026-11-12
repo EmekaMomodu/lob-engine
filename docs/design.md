@@ -164,7 +164,7 @@ defines it.
 
 | offset | size | field | notes |
 |---:|---:|---|---|
-| 0 | 8 | `id` | needed for `Trade.resting_id` and to erase from the id map on fill |
+| 0 | 8 | `id` | `Trade.resting_id`; also the id map's key (the map stores only indices, M6) |
 | 8 | 4 | `leaves` | open quantity (< 2^32 because qty <= 1e9) |
 | 12 | 4 | `total` | total order qty incl. filled; `filled = total - leaves` |
 | 16 | 4 | `prev` | pool index; `kNil` = head of level |
@@ -199,20 +199,31 @@ Fields: `price` (8) · `total` (8, 64-bit because many orders × 1e9 overflows
   touched in the constructor. The most recently freed slot is reused first,
   since it's the one most likely to still be in cache. **Only orders that rest
   take a slot**; an incoming order is matched as a stack-local `Aggressor`.
-- **IdMap**: linear probing over 16-byte `{key, value}` slots, power-of-two
-  capacity >= 2 × max orders (load factor <= 0.5), and the murmur3 `fmix64`
-  hash so sequential ids spread evenly.
-  - Order ids can be any `uint64`, including 0 and `UINT64_MAX`, so an empty
-    slot is marked by the value (`kNil`), not by a reserved key.
+- **IdMap** (final, after M6): linear probing over **4-byte index-only
+  slots**. Keys are read back from the order pool through a statically
+  dispatched `key_of(index)` callable. Power-of-two capacity >= 2 × max
+  orders (load factor <= 0.5), with **Fibonacci hashing** (one multiply).
+  - Order ids can be any `uint64`, so an empty slot is marked by `kNil` in
+    the slot, never by a reserved key.
   - Deletion uses **backward shift**: pull later entries of the cluster back
     into the hole. With tombstones, probe lengths slowly decay under
-    add/cancel churn, which forces periodic rehashes.
+    add/cancel churn.
+  - `probe()` returns either the matching slot or the empty insert slot, so
+    cancel and passive adds probe once (see the M6 notes on when that slot
+    stays valid).
+  - **History:** M3 used 16-byte `{key, value}` slots and murmur3 `fmix64`.
+    Profiling in M6 showed the table's cache footprint was the top cost (a
+    33.6 MB table for 1M capacity). Index-only slots cut it 4× and design B's
+    throughput by 29% (`docs/benchmarks.md`, M6).
   - Tested against `std::unordered_map` at full load in a deliberately tiny
     table, so long clusters and wrap-around are common.
   - Rejected: `std::unordered_map`. It allocates a node per insert and chases
     a pointer on every lookup.
-  - Rejected: `absl::flat_hash_map`. It's excellent, but adds a dependency
-    and is less explainable line by line.
+  - Rejected: `absl::flat_hash_map`. It's excellent, but adds a dependency,
+    stores full keys (so it doesn't get the index-only saving), and is less
+    explainable line by line.
+  - Known limitation: with client-chosen ids, an adversary who knows the hash
+    could pick colliding ids. Mitigations are listed in the README.
 - **Market orders** are matched as a limit order at the most aggressive price
   (`INT64_MAX` for a buy, `INT64_MIN` for a sell), so the matching loop has no
   market/limit branch.
