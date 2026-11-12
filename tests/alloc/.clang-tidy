@@ -1,0 +1,7 @@
+---
+# The replacement global operator new/delete must match libc++'s declarations,
+# whose parameter names are implementation-reserved (__sz, __p, ...).
+InheritParentConfig: true
+Checks: >
+  -readability-inconsistent-declaration-parameter-name
+...

@@ -8,6 +8,7 @@
 
 #include "lob/book_api.hpp"
 #include "lob/commands.hpp"
+#include "lob/engines.hpp"
 #include "lob/events.hpp"
 #include "lob/io.hpp"  // gtest failure messages
 #include "lob/reference/reference_book.hpp"
@@ -24,7 +25,8 @@ namespace lob::test {
 
 using Events = std::vector<Event>;
 
-using BookImplementations = ::testing::Types<reference::ReferenceBook<VectorSink>>;
+using BookImplementations =
+    ::testing::Types<reference::ReferenceBook<VectorSink>, MapEngine<VectorSink>>;
 
 inline constexpr Side kBuy = Side::Buy;
 inline constexpr Side kSell = Side::Sell;

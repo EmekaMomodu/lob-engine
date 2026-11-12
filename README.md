@@ -4,10 +4,10 @@ A low-latency limit order book and matching engine in C++20: price-time priority
 no heap allocation on the hot path, two benchmarked price-level designs, and
 differential testing against a deliberately simple reference implementation.
 
-> **Status: Milestone 2.** The reference (oracle) order book and the full behaviour
-> test suite are in place; the optimized engines land in Milestones 3–4. Design decisions are
-> tracked in [docs/design.md](docs/design.md). No performance numbers are published
-> yet; all numbers will come from documented, reproducible runs.
+> **Status: Milestone 3.** Design A (tree of price levels) is implemented, matches the
+> reference book on 100M+ random commands, and performs zero heap allocations after
+> construction. Design decisions: [docs/design.md](docs/design.md). Measured numbers,
+> each with its hardware, flags and workload: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Building
 
@@ -31,11 +31,18 @@ cmake --build build/release --target format-check  # CI formatting gate
 | `asan-ubsan` | `-O1 -g` + ASan + UBSan, asserts on |
 | `tidy` | Debug build with clang-tidy as a compile step |
 
-Run only unit tests, or only the benchmark smoke run:
+Run one group of tests (labels: `unit`, `differential`, `alloc`, `bench`):
 
 ```bash
-ctest --preset release --label-exclude bench
-ctest --preset release --label-regex bench
+ctest --preset release --label-regex unit
+LOB_DIFF_OPS=1000000 ctest --preset release --label-regex differential
+```
+
+Long differential fuzzing campaigns, and exact reproduction of a reported failure:
+
+```bash
+./build/release/tools/lob_fuzz --config all --seeds 1-25 --ops 1000000
+./build/release/tools/lob_fuzz --config dense --seed 3 --ops 4568
 ```
 
 On macOS, `clang-format`/`clang-tidy` come from Homebrew LLVM (`brew install llvm`);
@@ -55,19 +62,22 @@ from Docker on macOS (see [docs/design.md](docs/design.md#platform-notes)).
 ## Layout
 
 ```
-include/lob/   core engine (header-only: types, pool, id map, price levels, engine, sinks)
-reference/     simple reference order book (test oracle)
-tests/         unit/ and differential/ tests (GoogleTest)
-bench/         Google Benchmark suites + latency histogram harness  [M5]
-docker/        Linux build/profiling image
-docs/          design decisions, benchmark results
+include/lob/          public API: types, commands, events, sinks, OrderBook concept
+include/lob/engine/   optimized engine: order pool, id map, block arena, price levels, matcher
+reference/            simple reference order book (test oracle)
+workload/             deterministic command generator, workload replay, differential driver
+tests/                unit/ (typed behaviour suite), differential/, alloc/ (zero-allocation check)
+tools/                lob_fuzz: long differential campaigns and failure reproduction
+bench/                Google Benchmark suites (latency histogram harness in M5)
+docker/               Linux build/profiling image
+docs/                 design decisions, benchmark log, raw results
 ```
 
 ## Roadmap
 
 1. ✅ Architecture + repo skeleton
 2. ✅ Reference order book + full unit tests
-3. Optimized engine, design A (map-based levels) + differential tests
+3. ✅ Optimized engine, design A (map-based levels) + differential tests
 4. Optimized engine, design B (flat tick array + occupancy bitmap) + differential tests
 5. Benchmark suite, latency histograms, A vs B comparison
 6. Profiling pass: hotspots fixed, before/after documented

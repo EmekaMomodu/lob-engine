@@ -24,13 +24,15 @@ Checks: >
   -readability-identifier-length,
   -readability-function-cognitive-complexity,
   -portability-avoid-pragma-once,
-  -readability-trailing-comma
+  -readability-trailing-comma,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
 
 # Rationale for the disabled checks:
 #   easily-swappable-parameters  -> addressed with strong types (Price, Qty, OrderId) instead
 #   magic-numbers                -> tick/band constants in tests and benchmarks are clearer inline
 #   pro-bounds-*                 -> pools/arrays are indexed by validated indices on the hot path;
 #                                   bounds are enforced by asserts + sanitizer builds
+#                                   (includes pro-bounds-avoid-unchecked-container-access)
 #   non-private-member-variables -> plain aggregates (events, Order) are intentional PODs
 #   include-cleaner              -> too noisy with GoogleTest/Benchmark umbrella headers
 #   trailing-return-type         -> style preference, not a correctness check

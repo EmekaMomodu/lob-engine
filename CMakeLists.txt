@@ -60,10 +60,12 @@ target_compile_features(lob INTERFACE cxx_std_20)
 
 # Reference implementation (test oracle; also a baseline for benchmarks).
 add_subdirectory(reference)
+add_subdirectory(workload)
 
 if(LOB_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+  add_subdirectory(tools)
 endif()
 
 if(LOB_BUILD_BENCHMARKS)
