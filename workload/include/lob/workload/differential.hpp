@@ -96,8 +96,8 @@ DiffOutcome run_differential(const GeneratorConfig& config, std::uint64_t seed,
         std::ostringstream os;
         os << what << "\n  config=" << config.name << " seed=" << seed << " op=" << op
            << " (0-based)\n"
-           << "  reproduce: lob_fuzz --config " << config.name << " --seed " << seed
-           << " --ops " << (op + 1) << "\n"
+           << "  reproduce: lob_fuzz --config " << config.name << " --seed " << seed << " --ops "
+           << (op + 1) << "\n"
            << detail << "  last " << history.size() << " commands (oldest first):\n";
         for (const Command& command : history) {
             os << "    " << command << '\n';
@@ -140,8 +140,8 @@ DiffOutcome run_differential(const GeneratorConfig& config, std::uint64_t seed,
                 return fail(op, "STATE MISMATCH",
                             detail::first_snapshot_difference(ref_snap, eng_snap));
             }
-            if (ref.order_count() != eng.order_count() || ref.best_bid() != eng.best_bid() ||
-                ref.best_ask() != eng.best_ask()) {
+            if (ref.order_count() != eng.order_count() || ref.best_bid() != eng.best_bid()
+                || ref.best_ask() != eng.best_ask()) {
                 return fail(op, "QUERY MISMATCH (best price or order count)", "");
             }
             if constexpr (requires { eng.check_invariants(); }) {

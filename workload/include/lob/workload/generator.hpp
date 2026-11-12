@@ -116,8 +116,9 @@ public:
         if (const auto* accepted = std::get_if<Accepted>(&event)) {
             if (const auto* order = last_ ? std::get_if<NewOrder>(&*last_) : nullptr;
                 order != nullptr && order->id == accepted->id) {
-                add_live(order->id.value(),
-                         LiveOrder{.side = order->side, .price = order->price, .total = order->qty});
+                add_live(
+                    order->id.value(),
+                    LiveOrder{.side = order->side, .price = order->price, .total = order->qty});
             }
         } else if (const auto* f = std::get_if<Filled>(&event)) {
             remove_live(f->id.value());
@@ -284,7 +285,8 @@ private:
     }
 
     [[nodiscard]] Price clamp_to_band(std::int64_t price) const {
-        return Price{std::clamp(price, config_.book.min_price.value(), config_.book.max_price.value())};
+        return Price{
+            std::clamp(price, config_.book.min_price.value(), config_.book.max_price.value())};
     }
 
     // --- live-order tracking -------------------------------------------------
@@ -349,7 +351,9 @@ inline GeneratorConfig dense_config() {
 }
 
 /// Moderate everything; the baseline mix.
-inline GeneratorConfig default_config() { return GeneratorConfig{}; }
+inline GeneratorConfig default_config() {
+    return GeneratorConfig{};
+}
 
 /// Mostly invalid / unusual input against a very small book.
 inline GeneratorConfig edge_config() {

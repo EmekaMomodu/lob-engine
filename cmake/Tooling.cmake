@@ -20,7 +20,8 @@ file(
   "${PROJECT_SOURCE_DIR}/tests/*.cpp"
   "${PROJECT_SOURCE_DIR}/bench/*.hpp"
   "${PROJECT_SOURCE_DIR}/bench/*.cpp"
-  "${PROJECT_SOURCE_DIR}/tools/*.cpp")
+  "${PROJECT_SOURCE_DIR}/tools/*.cpp"
+  "${PROJECT_SOURCE_DIR}/workload/*.hpp")
 
 if(LOB_CLANG_FORMAT_EXE)
   add_custom_target(
