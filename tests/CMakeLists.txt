@@ -27,7 +27,8 @@ lob_add_test(
   unit/limit_matching_test.cpp
   unit/market_order_test.cpp
   unit/cancel_test.cpp
-  unit/modify_test.cpp)
+  unit/modify_test.cpp
+  unit/latency_histogram_test.cpp)
 
 # Engines vs. the reference on random command streams (LOB_DIFF_OPS per case).
 lob_add_test(lob_differential_tests LABEL differential SOURCES differential/differential_test.cpp)

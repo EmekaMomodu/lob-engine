@@ -131,3 +131,144 @@ after a large market order), a linear scan would add hundreds of ns to
 exactly the command where latency matters most. The replay averages hide
 this because such events are rare; per-operation tail latency (M5) is where
 it should show up.
+
+## M5: per-operation latency distributions and throughput (2026-11-12)
+
+### Method
+
+`bench/latency/lob_latency.cpp`, run separately for each (engine, workload)
+pair:
+
+1. **Generate** the command stream once, against the reference book
+   (untimed).
+2. **Latency runs** (5): construct a fresh engine and replay 200k commands
+   untimed as warm-up. Then timestamp every one of the next 2M commands
+   individually and record it in a log-linear histogram for its category.
+   - Categories: passive limit, aggressive limit (traded), market, cancel,
+     modify.
+   - Histograms merge across runs, giving 10M timed commands per pair.
+3. **Throughput runs** (5): construct a fresh engine and warm up the same
+   way. Time the same 2M commands as one block, with no per-op timer.
+   Median reported.
+
+The histogram (`workload/include/lob/workload/latency_histogram.hpp`) is
+HdrHistogram-style:
+- values below 128 ticks are exact; above that the relative error is at most
+  1/64;
+- percentiles report the bucket's upper edge, so they never under-report;
+- max is exact.
+
+Unit tests check its percentiles against exact sorted values.
+
+### Workloads
+
+| workload | model | measured shape |
+|---|---|---|
+| **realistic** | 48% limit · 42% cancel (scaled by depth, target 5k) · 3% market · 7% modify; passive prices geometric from the touch (mean ~4 ticks); 6% of limits aggressive | avg 2,624 resting orders, 89 levels at end |
+| **thin** | 50% limit · 37% cancel (target 400) · 8% market (up to 200 lots) · 5% modify; passive mean ~33 ticks out | avg 430 resting orders, 167 levels at end |
+
+### Environment and timer
+
+| | |
+|---|---|
+| CPU / OS | Apple M4 Max, macOS 27.2.1 (load average 1.9–2.0 during the run) |
+| Compiler / flags | Apple clang 21, `-O3 -DNDEBUG -march=native` (`release-native`) |
+| Thread placement | **no hard pinning** (macOS has none on Apple Silicon); QoS `USER_INTERACTIVE` |
+| Clock | `cntvct_el0` after `isb`. Reports 1 GHz units but **advances in ~42 ns steps** (measured median non-zero step: 42.0 ns) |
+| Timer overhead | back-to-back reads: mean 11.4 ns (included in every latency below; not subtracted) |
+
+Raw results: [m5_latency_apple_m4max.json](results/m5_latency_apple_m4max.json).
+
+### Throughput (block-timed, median of 5)
+
+| Book | realistic: ns/cmd | realistic: M cmd/s | thin: ns/cmd | thin: M cmd/s |
+|---|---:|---:|---:|---:|
+| Reference | 53.4 | 18.7 | 57.2 | 17.5 |
+| Design A (`MapEngine`) | 24.2 | 41.3 | 29.8 | 33.6 |
+| **Design B (`ArrayEngine`)** | **18.9** | **52.9** | **19.8** | **50.5** |
+| Design B, linear scan | 18.5 | 54.1 | 19.3 | 51.9 |
+
+### Per-operation latency, 10M timed commands each (ns)
+
+Every value includes the ~11 ns timer overhead. Percentiles are quantized to
+the 42 ns clock step (42, 83/84, 125, 167, ...).
+
+**realistic**
+
+| Book | mean | p50 | p90 | p99 | p99.9 | max |
+|---|---:|---:|---:|---:|---:|---:|
+| Reference | 65.7 | 42 | 125 | 167 | 251 | 26,185 |
+| Design A | 47.2 | 42 | 84 | 125 | 167 | 25,476 |
+| Design B | 42.0 | 42 | 83 | 125 | 167 | 28,933 |
+| Design B, linear | 44.6 | 42 | 84 | 125 | 167 | 25,476 |
+
+**thin**
+
+| Book | mean | p50 | p90 | p99 | p99.9 | max |
+|---|---:|---:|---:|---:|---:|---:|
+| Reference | 67.6 | 83 | 84 | 167 | 251 | 21,933 |
+| Design A | 49.4 | 42 | 84 | 125 | 167 | 27,850 |
+| Design B | 40.4 | 42 | 83 | 125 | 167 | 25,541 |
+| Design B, linear | 42.1 | 42 | 83 | 125 | 167 | 28,475 |
+
+**Mean latency by category, realistic (ns):**
+
+| Book | passive limit | aggressive limit | market | cancel | modify |
+|---|---:|---:|---:|---:|---:|
+| Reference | 46.6 | 67.1 | 67.9 | 91.6 | 83.7 |
+| Design A | 50.5 | 54.9 | 57.0 | 37.5 | 43.4 |
+| Design B | 44.9 | 52.8 | 54.1 | 32.4 | 34.5 |
+
+### How to read these numbers
+
+- **Latency and throughput measure different things.** Design B's mean timed
+  latency (42 ns) is about twice its block-timed cost (18.9 ns/cmd).
+  - The fenced timestamps (`isb`) drain the pipeline, so each command runs
+    alone.
+  - Without timestamps, the out-of-order core overlaps consecutive commands.
+  - Timed latency is the cost when a command arrives alone (the market-data
+    case). Throughput is the cost in a busy stream (the replay or catch-up
+    case).
+- **On this machine the percentiles are dominated by clock resolution.** All
+  three optimized books show p50 = 1 clock step and p99 = 3 steps. The
+  differences between them live below the 42 ns step, which is why the mean
+  is reported: averaged over millions of samples, quantization error cancels
+  out (each measurement starts at a random point within a tick).
+- **The max is the operating system, not the engine.** Every book, including
+  the naive reference, shows a 6–29 µs maximum: interrupts, preemption or
+  migration on an unpinned desktop thread. Bounding it needs an isolated core
+  (`isolcpus`, `nohz_full`, IRQ affinity) on Linux, which macOS can't provide.
+- **The cancel column shows the biggest gap.** The reference's cancel (91.6 ns)
+  is a hash lookup plus a linear search of a `std::deque` within the level.
+  The engines' cancel (32–38 ns) is a hash lookup plus an O(1) intrusive
+  unlink.
+- **The linear-scan risk didn't show up in these workloads.** Design B with a
+  linear scan matches the bitmap version here because even the thin book's
+  gaps after a sweep stay small. The cost of a large gap is real but rare;
+  M4's isolated benchmark measures it at about 1 µs for 4,096 empty ticks.
+  This workload doesn't produce that case, and it hasn't been tuned until it
+  does.
+
+### Noise sources (and what was done about each)
+
+| Source | Effect | Mitigation here | On a dedicated Linux box |
+|---|---|---|---|
+| Clock resolution | percentiles quantized to 42 ns | report means; document | TSC: ~0.3 ns resolution |
+| Timer overhead / serialization | ~11 ns + lost overlap per sample | measured and reported; throughput measured separately | same approach |
+| No CPU pinning | migration between cores, cold caches | QoS `USER_INTERACTIVE` (P-cores only) | `--cpu N` with `isolcpus` |
+| Interrupts / preemption | µs-scale max | none possible | `nohz_full`, IRQ affinity away from the core |
+| Frequency scaling / thermals | run-to-run drift (7–17% between M3 and M4 sessions) | repetitions; compare only within one run | fixed governor, turbo off |
+| Page faults | first-touch stalls | all engine memory allocated and touched at construction; warm-up | plus `mlockall` |
+| Background load | load average ~2 | none | idle machine |
+
+### Reproduce
+
+```bash
+cmake --preset release-native && cmake --build --preset release-native --target lob_latency
+./build/release-native/bench/lob_latency --ops 2000000 --warmup 200000 --runs 5 \
+    --json latency.json            # add --cpu N on Linux
+```
+
+Headline numbers belong on a bare-metal x86-64 Linux machine with an
+isolated core. The harness pins the thread (`--cpu`) and uses `rdtsc` there;
+nothing in this file was measured on such a machine.
