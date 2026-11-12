@@ -58,6 +58,8 @@ struct Options {
     int cpu{-1};
     std::uint64_t seed{42};
     std::string json;
+    bool latency{true};  // --mode latency|throughput|both
+    bool throughput{true};
 };
 
 struct Result {
@@ -102,6 +104,12 @@ bool parse(int argc, char** argv, Options& o) {
             o.seed = std::stoull(value);
         } else if (flag == "--json") {
             o.json = value;
+        } else if (flag == "--mode") {
+            o.latency = value == "latency" || value == "both";
+            o.throughput = value == "throughput" || value == "both";
+            if (!o.latency && !o.throughput) {
+                return false;
+            }
         } else {
             return false;
         }
@@ -126,7 +134,7 @@ void measure(const lob::workload::Workload& w, const Options& o, Result& result)
 
     for (int run = 0; run < o.runs; ++run) {
         // --- latency: one timestamp pair per command -----------------------
-        {
+        if (o.latency) {
             lob::CountingSink sink;
             auto book = std::make_unique<Book>(w.config.book, sink);
             for (std::size_t i = 0; i < warmup; ++i) {
@@ -147,7 +155,7 @@ void measure(const lob::workload::Workload& w, const Options& o, Result& result)
             }
         }
         // --- throughput: the same commands timed as one block --------------
-        {
+        if (o.throughput) {
             lob::CountingSink sink;
             auto book = std::make_unique<Book>(w.config.book, sink);
             for (std::size_t i = 0; i < warmup; ++i) {
@@ -231,9 +239,10 @@ void print_result(const Result& r, double ns_per_tick) {
         }
         std::printf("   %-17s %10llu %8.1f", std::string(kCategoryNames[c]).c_str(),
                     static_cast<unsigned long long>(h.count()), h.mean() * ns_per_tick);
-        for (const double p : kPercentiles) {
-            std::printf(p == 100.0 ? " %9.0f" : " %8.0f",
-                        static_cast<double>(h.percentile(p)) * ns_per_tick);
+        for (std::size_t k = 0; k < kPercentiles.size(); ++k) {
+            const bool is_max = k + 1 == kPercentiles.size();
+            std::printf(is_max ? " %9.0f" : " %8.0f",
+                        static_cast<double>(h.percentile(kPercentiles[k])) * ns_per_tick);
         }
         std::printf("\n");
     }
@@ -334,7 +343,8 @@ int main(int argc, char** argv) {
             std::cerr << "usage: lob_latency [--engine reference,map,array,array-scan|all]\n"
                          "                   [--workload realistic,thin,replay,replay_sparse|all]\n"
                          "                   [--ops N] [--warmup N] [--runs N] [--cpu N]\n"
-                         "                   [--seed N] [--json PATH]\n";
+                         "                   [--seed N] [--json PATH]\n"
+                         "                   [--mode latency|throughput|both]\n";
             return 2;
         }
         return run(options);
