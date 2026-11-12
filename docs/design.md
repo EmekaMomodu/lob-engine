@@ -155,34 +155,174 @@ nothing once optimised.
   swapped arguments, which is exactly the bug class
   `bugprone-easily-swappable-parameters` warns about.
 
-## Hot-path data structures (layout finalized in M3 with static_asserts)
+## Hot-path data structures (M3)
 
-- **Order** is about 32 bytes. *M2 note:* total-quantity modify semantics
-  mean each order also stores its filled (or total) quantity. Fitting into
-  32 B therefore needs packing, e.g. a 32-bit price offset within the band, or
-  folding the side into a spare bit. That gets decided and measured in M3. List links are `uint32` pool indices instead of
-  pointers, which halves the size and lets the pool be one contiguous allocation.
-- **OrderPool** is a fixed slab with a LIFO free-list, so recently freed slots
-  (likely still in cache) are reused first. When it is full, the order is
-  rejected with `CapacityExceeded`; the pool never grows on the hot path.
-- **IdMap** uses linear probing, power-of-two capacity, and backward-shift
-  deletion (no tombstones).
-  - Rejected: `std::unordered_map`, which allocates a node per insert and
-    chases pointers on lookup.
-  - Rejected for now: `absl::flat_hash_map`. It's excellent, but adds a
-    dependency and is harder to explain line by line.
-- **Level** stores the head and tail of an intrusive FIFO list, plus total
-  quantity and order count.
-- **Design A (`MapLevels`)** is a `std::map` per side with a fixed-block node
-  allocator pre-sized at startup, plus a cached best price. Note:
-  `std::pmr::unsynchronized_pool_resource` can fall through to its upstream
-  allocator, which is why the allocator is written by hand.
-- **Design B (`ArrayLevels`)** is a flat `Level[band]` indexed by
+Every layout below is enforced with `static_assert` in the header that
+defines it.
+
+### Order: 32 bytes, 32-byte aligned (`include/lob/engine/order_pool.hpp`)
+
+| offset | size | field | notes |
+|---:|---:|---|---|
+| 0 | 8 | `id` | needed for `Trade.resting_id` and to erase from the id map on fill |
+| 8 | 4 | `leaves` | open quantity (< 2^32 because qty <= 1e9) |
+| 12 | 4 | `total` | total order qty incl. filled; `filled = total - leaves` |
+| 16 | 4 | `prev` | pool index; `kNil` = head of level |
+| 20 | 4 | `next` | pool index; `kNil` = tail; doubles as the free-list link |
+| 24 | 4 | `level` | handle of the level the order rests on |
+| 28 | 1 | `side` | sits in what would otherwise be padding |
+| 29 | 3 | padding | |
+
+- **Two orders per 64 B line** (four per 128 B line on Apple Silicon). With
+  32-byte alignment, an order never straddles a cache line.
+- **32-bit pool indices instead of pointers.** Half the size, and the pool is
+  one contiguous allocation.
+- **The price is not stored in the order.** The M1 plan had it there; M2's
+  total-quantity modify semantics added a field and pushed the struct past
+  32 B. The price is reachable through `level` in one hop, and every path that
+  needs it (cancel, modify, fill) touches the level anyway. The `level` handle
+  also makes cancel O(1) in both designs: unlinking never searches for the level.
+  - Rejected: storing a 32-bit price offset within the band. It also fits, but
+    it constrains the band width for design A, and cancel would still need a
+    level lookup.
+  - Rejected: a hot/cold split with `total` in a parallel array. It saves
+    nothing here, since everything fits in 32 B.
+
+### Level: 32 bytes (`include/lob/engine/level.hpp`)
+
+Fields: `price` (8) · `total` (8, 64-bit because many orders × 1e9 overflows
+32 bits) · `head` (4) · `tail` (4) · `count` (4) · `side` (1) · padding (3).
+
+### Containers
+
+- **OrderPool** is a fixed slab with an intrusive LIFO free-list, built and
+  touched in the constructor. The most recently freed slot is reused first,
+  since it's the one most likely to still be in cache. **Only orders that rest
+  take a slot**; an incoming order is matched as a stack-local `Aggressor`.
+- **IdMap**: linear probing over 16-byte `{key, value}` slots, power-of-two
+  capacity >= 2 × max orders (load factor <= 0.5), and the murmur3 `fmix64`
+  hash so sequential ids spread evenly.
+  - Order ids can be any `uint64`, including 0 and `UINT64_MAX`, so an empty
+    slot is marked by the value (`kNil`), not by a reserved key.
+  - Deletion uses **backward shift**: pull later entries of the cluster back
+    into the hole. With tombstones, probe lengths slowly decay under
+    add/cancel churn, which forces periodic rehashes.
+  - Tested against `std::unordered_map` at full load in a deliberately tiny
+    table, so long clusters and wrap-around are common.
+  - Rejected: `std::unordered_map`. It allocates a node per insert and chases
+    a pointer on every lookup.
+  - Rejected: `absl::flat_hash_map`. It's excellent, but adds a dependency
+    and is less explainable line by line.
+- **Market orders** are matched as a limit order at the most aggressive price
+  (`INT64_MAX` for a buy, `INT64_MIN` for a sell), so the matching loop has no
+  market/limit branch.
+
+### Design A: `MapLevels` (`include/lob/engine/map_levels.hpp`)
+
+- One `std::map<Price, LevelRef>` per side: `std::greater<>` for bids and
+  `std::less<>` for asks, so `begin()` is always the best level and costs O(1)
+  (std::map caches its leftmost node).
+  - Rejected: one map using `rbegin()` for bids. In libc++, `--end()` walks
+    down from the root, which is O(log L).
+- The map stores only a 32-bit handle. `Level` structs live in a separate
+  contiguous pool, so orders can point at their level.
+- Map nodes come from `BlockArena` through `ArenaAllocator`. The arena is a
+  fixed-block free list allocated (and page-faulted) up front, using 64-byte
+  blocks; the red-black tree node is 48 B in both libc++ and libstdc++, and
+  the allocator throws on mismatch.
+  - Rejected: `std::pmr::unsynchronized_pool_resource`. It can fall through
+    to its upstream allocator, and pmr adds a virtual call per allocation.
+- **Cost model:** creating or erasing a level is O(log L) (tree insert/erase);
+  best-price lookup and cancel are O(1).
+- **Memory bound:** a level exists only while an order rests on it, so there
+  are never more than `max_orders` levels or map nodes.
+
+### Design B: `ArrayLevels` (M4)
+
+`ArrayLevels` is a flat `Level[band]` indexed by
   `price - band_low`, plus a two-level occupancy bitmap, so finding the next
   non-empty level after the best one empties takes two `countl_zero` /
   `countr_zero` instructions instead of a linear scan. It will be benchmarked
   against the plain linear scan (**provisional**: the winner depends on how
   sparse the book is).
+
+## Verification (M3)
+
+### Differential testing
+
+`workload/include/lob/workload/differential.hpp` runs the reference book and
+an engine in lockstep on one random command stream. It checks:
+- after **every** command: the two event streams are identical;
+- every N commands and at the end: the full order-level snapshots match, best
+  bid/ask and order count match, and `check_invariants()` passes. That
+  function walks every level and order, checking links, aggregates, sides,
+  id-map entries and pool counts.
+
+A failure report includes the seed, the failing command's index, both event
+streams (or the first differing level) and the last 24 commands, plus a
+`lob_fuzz` command line that reproduces it exactly.
+
+The generator tracks which orders are live by observing the reference book's
+events (Accepted adds an id; Filled and Cancelled remove it). That lets cancels
+and modifies mostly target real resting orders, while a configurable fraction
+target unknown ids, reuse dead ids, duplicate live ids, or carry invalid
+quantities and prices. There are four named configurations:
+
+| config | band | capacity | character |
+|---|---|---|---|
+| `dense` | 64 ticks | 64 | constant level collisions, sweeps, band edges |
+| `default` | 100k ticks | 4,096 | baseline mix |
+| `edge` | 16 ticks | 8 | ~10% invalid input of every kind, modify-heavy, capacity pressure |
+| `deep` | 1M ticks | 50,000 | add-heavy, deep book, long sweeps, saturates capacity |
+
+Over 200k commands (seed 1), every configuration produced trades, partial
+fills, both kinds of modify, and every cancel and reject reason that its
+shape allows. `CapacityExceeded` appears in `edge` and `deep`; `NoLiquidity`
+in `dense` and `edge`.
+
+The harness is itself tested: an engine with a planted bug must be reported,
+with a reproduction line.
+
+**Results (M3, design A):**
+- CI runs 12 cases × 200k commands = 2.4M per build, under release and
+  ASan+UBSan on GCC 14, Clang 18 and Apple Clang.
+- Locally (Apple M4 Max), `lob_fuzz --config all --seeds 1-25 --ops 1000000`
+  matched the reference on **100,000,000 commands** (release, 18.2 s).
+- A further **10,000,000** commands (seeds 101–105) passed under ASan+UBSan.
+
+`replay_config` adds one more generator knob, `target_live_orders`. It scales
+the cancel weight by `live / target`, so each order has a constant cancel
+hazard and the book holds a steady depth. Without it, the benchmark workload
+drained to about 6 resting orders (see `docs/benchmarks.md`).
+
+**Reproducibility across platforms.** The RNG (xoshiro256**) and the integer
+distributions are hand-written, because `std::uniform_int_distribution`
+gives different sequences in libc++ and libstdc++.
+- Writing `GeneratorGoldenSequence` found a real bug. Two expressions drew
+  several random numbers at once (`f(rng(), rng())`, `rng() * rng()`), and the
+  evaluation order of such operands is unspecified in C++. GCC and Clang could
+  therefore produce different streams from the same seed.
+- Every draw is now its own statement. The golden test pins a fingerprint of
+  the first 20k commands of two workloads, and CI checks it under both GCC
+  (libstdc++) and Clang (libc++).
+
+### No allocation on the hot path
+
+`tests/alloc/no_alloc_test.cpp` replaces global `operator new`/`delete` with
+counting versions. It pre-generates a workload, constructs the engine, then
+switches counting on and replays 200k commands. The engine must make **zero**
+allocations.
+- It runs for every named workload, so rejects, sweeps, modifies, level
+  create/erase, capacity exhaustion and id reuse are all covered.
+- This is stronger than "no allocation after warm-up": the count is zero from
+  the very first command after construction.
+
+### API note
+
+`lob::apply(book, command)` was renamed to `lob::process`. `Command` is a
+`std::variant`, so an unqualified `apply(book, cmd)` also finds `std::apply`
+through argument-dependent lookup, and for a non-const command `std::apply`
+is the better match (a compile error).
 
 ## Threading
 

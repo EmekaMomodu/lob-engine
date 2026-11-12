@@ -9,6 +9,7 @@
 #include "lob/types.hpp"
 
 #include <ostream>
+#include <variant>
 
 namespace lob {
 
@@ -68,6 +69,17 @@ inline std::ostream& operator<<(std::ostream& os, const Cancelled& e) {
 inline std::ostream& operator<<(std::ostream& os, const Modified& e) {
     return os << "Modified{id=" << e.id << " px=" << e.price << " leaves=" << e.leaves
               << (e.kept_priority ? " kept-priority" : " lost-priority") << '}';
+}
+
+// --- type-erased ------------------------------------------------------------
+// (Found by ADL: std::variant<lob::...> has lob as an associated namespace.)
+inline std::ostream& operator<<(std::ostream& os, const Event& event) {
+    std::visit([&os](const auto& e) { os << e; }, event);
+    return os;
+}
+inline std::ostream& operator<<(std::ostream& os, const Command& command) {
+    std::visit([&os](const auto& c) { os << c; }, command);
+    return os;
 }
 
 // --- snapshot ---------------------------------------------------------------

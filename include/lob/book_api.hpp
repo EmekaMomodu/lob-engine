@@ -27,10 +27,13 @@ concept OrderBook = requires(B& book, const B& cbook, const NewOrder& new_order,
     { cbook.snapshot() } -> std::same_as<BookSnapshot>;
 };
 
-/// Dispatch a type-erased command. Convenience for tests and replay tools;
-/// benchmarks call submit/cancel/modify directly.
+/// Dispatch a type-erased command. Convenience for tests, replay and tools.
+///
+/// Deliberately not named `apply`: Command is a std::variant, so an
+/// unqualified `apply(book, cmd)` would also find std::apply through
+/// argument-dependent lookup, and for a non-const command std::apply wins.
 template <OrderBook B>
-void apply(B& book, const Command& command) {
+void process(B& book, const Command& command) {
     std::visit(
         [&book](const auto& cmd) {
             using T = std::decay_t<decltype(cmd)>;
