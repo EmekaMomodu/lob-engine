@@ -58,6 +58,9 @@ add_library(lob::lob ALIAS lob)
 target_include_directories(lob INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(lob INTERFACE cxx_std_20)
 
+# Reference implementation (test oracle; also a baseline for benchmarks).
+add_subdirectory(reference)
+
 if(LOB_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)

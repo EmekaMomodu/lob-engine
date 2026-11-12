@@ -23,7 +23,8 @@ Checks: >
   -modernize-use-trailing-return-type,
   -readability-identifier-length,
   -readability-function-cognitive-complexity,
-  -portability-avoid-pragma-once
+  -portability-avoid-pragma-once,
+  -readability-trailing-comma
 
 # Rationale for the disabled checks:
 #   easily-swappable-parameters  -> addressed with strong types (Price, Qty, OrderId) instead
@@ -36,6 +37,7 @@ Checks: >
 #   identifier-length            -> `id`, `px`, `qty` are domain-standard names
 #   cognitive-complexity         -> the matching loop is inherently branchy; reviewed by hand
 #   avoid-pragma-once            -> supported by every compiler we target (GCC, Clang, MSVC)
+#   trailing-comma               -> style only; fights clang-format bin-packing of short initializers
 
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/(include|reference|tests|bench|tools)/.*'
