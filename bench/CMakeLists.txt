@@ -14,3 +14,12 @@ endfunction()
 
 lob_add_benchmark(lob_replay_bench SOURCES micro/replay_bench.cpp)
 lob_add_benchmark(lob_best_search_bench SOURCES micro/best_search_bench.cpp)
+
+# Per-operation latency harness (custom; not Google Benchmark).
+find_package(Threads REQUIRED)
+add_executable(lob_latency latency/lob_latency.cpp)
+target_link_libraries(lob_latency PRIVATE lob::lob lob::reference lob::workload lob_project_options
+                                          Threads::Threads)
+lob_enable_tidy(lob_latency)
+add_test(NAME lob_latency_smoke COMMAND lob_latency --ops 20000 --warmup 2000 --runs 1)
+set_tests_properties(lob_latency_smoke PROPERTIES LABELS bench)

@@ -1,0 +1,9 @@
+---
+# Latency harness. Inherits bench/ config; disabled here only:
+#   cppcoreguidelines-pro-type-vararg  -> column-formatted report output uses printf
+#   modernize-raw-string-literal       -> fires on every quote in the hand-written JSON writer
+InheritParentConfig: true
+Checks: >
+  -cppcoreguidelines-pro-type-vararg,
+  -modernize-raw-string-literal
+...

@@ -42,6 +42,11 @@ struct GeneratorConfig {
     // Price model (ticks). Passive limits sit 1..max_passive_offset behind the
     // mid; aggressive_pct of limits are priced 0..max_aggressive_offset through it.
     std::int64_t max_passive_offset{20};
+    // Passive offset distribution. 0: uniform in [1, max_passive_offset].
+    // p > 0: geometric -- each extra tick behind the mid has probability p%,
+    // so mean offset ~ 1 / (1 - p/100) and most orders sit near the touch,
+    // as in real books. (Capped at max_passive_offset.)
+    std::uint32_t passive_decay_pct{0};
     std::uint32_t aggressive_pct{10};
     std::int64_t max_aggressive_offset{5};
     std::uint32_t mid_move_pct{5};  // chance per command that the mid moves one tick
@@ -269,8 +274,19 @@ private:
         if (rng_.percent(config_.aggressive_pct)) {
             return aggressive_price(side);
         }
-        const std::int64_t offset = rng_.between(1, config_.max_passive_offset);
+        const std::int64_t offset = passive_offset();
         return clamp_to_band(side == Side::Buy ? mid_ - offset : mid_ + offset);
+    }
+
+    std::int64_t passive_offset() {
+        if (config_.passive_decay_pct == 0) {
+            return rng_.between(1, config_.max_passive_offset);
+        }
+        std::int64_t offset = 1;
+        while (offset < config_.max_passive_offset && rng_.percent(config_.passive_decay_pct)) {
+            ++offset;
+        }
+        return offset;
     }
 
     Price aggressive_price(Side side) {
