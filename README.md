@@ -4,8 +4,8 @@ A low-latency limit order book and matching engine in C++20: price-time priority
 no heap allocation on the hot path, two benchmarked price-level designs, and
 differential testing against a deliberately simple reference implementation.
 
-> **Status: Milestone 1 (skeleton).** Build, CI, tooling and test/bench harnesses
-> are in place; the engine itself lands in Milestones 2–4. Design decisions are
+> **Status: Milestone 2.** The reference (oracle) order book and the full behaviour
+> test suite are in place; the optimized engines land in Milestones 3–4. Design decisions are
 > tracked in [docs/design.md](docs/design.md). No performance numbers are published
 > yet; all numbers will come from documented, reproducible runs.
 
@@ -56,7 +56,7 @@ from Docker on macOS (see [docs/design.md](docs/design.md#platform-notes)).
 
 ```
 include/lob/   core engine (header-only: types, pool, id map, price levels, engine, sinks)
-reference/     simple reference order book (test oracle)            [M2]
+reference/     simple reference order book (test oracle)
 tests/         unit/ and differential/ tests (GoogleTest)
 bench/         Google Benchmark suites + latency histogram harness  [M5]
 docker/        Linux build/profiling image
@@ -66,7 +66,7 @@ docs/          design decisions, benchmark results
 ## Roadmap
 
 1. ✅ Architecture + repo skeleton
-2. Reference order book + full unit tests
+2. ✅ Reference order book + full unit tests
 3. Optimized engine, design A (map-based levels) + differential tests
 4. Optimized engine, design B (flat tick array + occupancy bitmap) + differential tests
 5. Benchmark suite, latency histograms, A vs B comparison
