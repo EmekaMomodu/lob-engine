@@ -25,7 +25,8 @@ namespace lob::workload {
 inline GeneratorConfig replay_config() {
     GeneratorConfig c;
     c.name = "replay";
-    c.book = BookConfig{.min_price = Price{1}, .max_price = Price{100'000}, .max_orders = 1U << 20U};
+    c.book =
+        BookConfig{.min_price = Price{1}, .max_price = Price{100'000}, .max_orders = 1U << 20U};
     c.w_limit = 45;
     c.w_market = 5;
     c.w_cancel = 40;
@@ -56,7 +57,8 @@ struct Workload {
     std::size_t final_levels{};     // bid + ask price levels at the end
 };
 
-inline Workload make_workload(const GeneratorConfig& config, std::uint64_t seed, std::size_t count) {
+inline Workload make_workload(const GeneratorConfig& config, std::uint64_t seed,
+                              std::size_t count) {
     Workload w{.config = config,
                .seed = seed,
                .commands = {},
