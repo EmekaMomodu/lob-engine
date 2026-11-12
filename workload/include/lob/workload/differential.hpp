@@ -28,7 +28,8 @@ namespace lob::workload {
 struct DiffOptions {
     std::uint64_t ops{100'000};
     std::uint64_t check_every{1'000};
-    std::size_t history{24};  // commands included in a failure report
+    std::size_t history{24};    // commands included in a failure report
+    const char* engine{"all"};  // engine name, for the reproduction line
 };
 
 struct DiffOutcome {
@@ -96,8 +97,8 @@ DiffOutcome run_differential(const GeneratorConfig& config, std::uint64_t seed,
         std::ostringstream os;
         os << what << "\n  config=" << config.name << " seed=" << seed << " op=" << op
            << " (0-based)\n"
-           << "  reproduce: lob_fuzz --config " << config.name << " --seed " << seed << " --ops "
-           << (op + 1) << "\n"
+           << "  reproduce: lob_fuzz --engine " << options.engine << " --config " << config.name
+           << " --seed " << seed << " --ops " << (op + 1) << "\n"
            << detail << "  last " << history.size() << " commands (oldest first):\n";
         for (const Command& command : history) {
             os << "    " << command << '\n';

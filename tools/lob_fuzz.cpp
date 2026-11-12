@@ -2,7 +2,7 @@
 //
 //   lob_fuzz --config dense --seed 1 --ops 10000000
 //   lob_fuzz --config all --seeds 1-8 --ops 2000000
-//   lob_fuzz --engine map --config default --seed 3 --ops 4568   # reproduce a failure
+//   lob_fuzz --engine array --config default --seed 3 --ops 4568  # reproduce a failure
 //
 // Exit code 0 if every run matched the reference, 1 on the first mismatch
 // (the full report is printed), 2 on bad arguments.
@@ -23,7 +23,7 @@
 namespace {
 
 struct Args {
-    std::string engine{"map"};
+    std::string engine{"all"};
     std::string config{"all"};
     std::uint64_t seed_first{1};
     std::uint64_t seed_last{1};
@@ -32,7 +32,8 @@ struct Args {
 };
 
 void usage() {
-    std::cerr << "usage: lob_fuzz [--engine map] [--config dense|default|edge|deep|all]\n"
+    std::cerr << "usage: lob_fuzz [--engine map|array|array-scan|all]\n"
+                 "                [--config dense|default|edge|deep|all]\n"
                  "                [--seed N | --seeds A-B] [--ops N] [--check-every N]\n";
 }
 
@@ -65,7 +66,22 @@ bool parse(int argc, char** argv, Args& args) {
             return false;
         }
     }
-    return args.engine == "map" && args.seed_first <= args.seed_last && args.ops > 0;
+    const bool known_engine = args.engine == "map" || args.engine == "array"
+                              || args.engine == "array-scan" || args.engine == "all";
+    return known_engine && args.seed_first <= args.seed_last && args.ops > 0;
+}
+
+lob::workload::DiffOutcome run_engine(const std::string& engine,
+                                      const lob::workload::GeneratorConfig& config,
+                                      std::uint64_t seed,
+                                      const lob::workload::DiffOptions& options) {
+    if (engine == "map") {
+        return lob::workload::run_differential<lob::MapEngine>(config, seed, options);
+    }
+    if (engine == "array") {
+        return lob::workload::run_differential<lob::ArrayEngine>(config, seed, options);
+    }
+    return lob::workload::run_differential<lob::ArrayScanEngine>(config, seed, options);
 }
 
 int run(const Args& args) {
@@ -79,24 +95,29 @@ int run(const Args& args) {
         return 2;
     }
 
+    const std::vector<std::string> engines =
+        args.engine == "all" ? std::vector<std::string>{"map", "array", "array-scan"}
+                             : std::vector<std::string>{args.engine};
+
     std::uint64_t total_ops = 0;
     const auto start = std::chrono::steady_clock::now();
-    for (const auto& config : configs) {
-        for (std::uint64_t seed = args.seed_first; seed <= args.seed_last; ++seed) {
-            const auto t0 = std::chrono::steady_clock::now();
-            const auto outcome = lob::workload::run_differential<lob::MapEngine>(
-                config, seed,
-                lob::workload::DiffOptions{.ops = args.ops, .check_every = args.check_every});
-            const std::chrono::duration<double> dt = std::chrono::steady_clock::now() - t0;
-            total_ops += outcome.ops_run;
-            if (!outcome.passed) {
-                std::cout << "FAIL " << args.engine << ' ' << config.name << " seed=" << seed
-                          << '\n'
-                          << outcome.failure;
-                return 1;
+    for (const auto& engine : engines) {
+        for (const auto& config : configs) {
+            for (std::uint64_t seed = args.seed_first; seed <= args.seed_last; ++seed) {
+                const auto t0 = std::chrono::steady_clock::now();
+                const lob::workload::DiffOptions options{
+                    .ops = args.ops, .check_every = args.check_every, .engine = engine.c_str()};
+                const auto outcome = run_engine(engine, config, seed, options);
+                const std::chrono::duration<double> dt = std::chrono::steady_clock::now() - t0;
+                total_ops += outcome.ops_run;
+                if (!outcome.passed) {
+                    std::cout << "FAIL " << engine << ' ' << config.name << " seed=" << seed << '\n'
+                              << outcome.failure;
+                    return 1;
+                }
+                std::cout << "ok   " << engine << ' ' << config.name << " seed=" << seed
+                          << " ops=" << outcome.ops_run << " (" << dt.count() << " s)\n";
             }
-            std::cout << "ok   " << args.engine << ' ' << config.name << " seed=" << seed
-                      << " ops=" << outcome.ops_run << " (" << dt.count() << " s)\n";
         }
     }
     const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - start;

@@ -26,7 +26,8 @@ namespace lob::test {
 using Events = std::vector<Event>;
 
 using BookImplementations =
-    ::testing::Types<reference::ReferenceBook<VectorSink>, MapEngine<VectorSink>>;
+    ::testing::Types<reference::ReferenceBook<VectorSink>, MapEngine<VectorSink>,
+                     ArrayEngine<VectorSink>, ArrayScanEngine<VectorSink>>;
 
 inline constexpr Side kBuy = Side::Buy;
 inline constexpr Side kSell = Side::Sell;

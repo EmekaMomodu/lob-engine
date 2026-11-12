@@ -36,18 +36,24 @@ using Case = std::tuple<std::string, std::uint64_t>;  // config name, seed
 class Differential : public ::testing::TestWithParam<Case> {
 protected:
     template <template <class> class Engine>
-    void run() {
+    void run(const char* engine_name) {
         const auto& [name, seed] = GetParam();
         const auto config = find_config(name);
         ASSERT_TRUE(config.has_value()) << "unknown config " << name;
-        const DiffOutcome outcome =
-            run_differential<Engine>(*config, seed, DiffOptions{.ops = ops_per_case()});
+        const DiffOutcome outcome = run_differential<Engine>(
+            *config, seed, DiffOptions{.ops = ops_per_case(), .engine = engine_name});
         ASSERT_TRUE(outcome.passed) << outcome.failure;
     }
 };
 
 TEST_P(Differential, MapEngineMatchesReference) {
-    run<MapEngine>();
+    run<MapEngine>("map");
+}
+TEST_P(Differential, ArrayEngineMatchesReference) {
+    run<ArrayEngine>("array");
+}
+TEST_P(Differential, ArrayScanEngineMatchesReference) {
+    run<ArrayScanEngine>("array-scan");
 }
 
 INSTANTIATE_TEST_SUITE_P(Fuzz, Differential,
@@ -81,11 +87,11 @@ private:
 };
 
 TEST(DifferentialHarness, ReportsPlantedBugWithReproduction) {
-    const DiffOutcome outcome =
-        run_differential<BuggyEngine>(default_config(), 1, DiffOptions{.ops = 100'000});
+    const DiffOutcome outcome = run_differential<BuggyEngine>(
+        default_config(), 1, DiffOptions{.ops = 100'000, .engine = "buggy"});
     ASSERT_FALSE(outcome.passed);
     EXPECT_NE(outcome.failure.find("EVENT MISMATCH"), std::string::npos) << outcome.failure;
-    EXPECT_NE(outcome.failure.find("reproduce: lob_fuzz --config default --seed 1"),
+    EXPECT_NE(outcome.failure.find("reproduce: lob_fuzz --engine buggy --config default --seed 1"),
               std::string::npos)
         << outcome.failure;
     EXPECT_LT(outcome.ops_run, 100'000U);

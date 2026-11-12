@@ -239,12 +239,56 @@ Fields: `price` (8) · `total` (8, 64-bit because many orders × 1e9 overflows
 
 ### Design B: `ArrayLevels` (M4)
 
-`ArrayLevels` is a flat `Level[band]` indexed by
-  `price - band_low`, plus a two-level occupancy bitmap, so finding the next
-  non-empty level after the best one empties takes two `countl_zero` /
-  `countr_zero` instructions instead of a linear scan. It will be benchmarked
-  against the plain linear scan (**provisional**: the winner depends on how
-  sparse the book is).
+(`include/lob/engine/array_levels.hpp`, `occupancy_bitmap.hpp`)
+
+- **One flat array of `Level`s, one per tick of the band**
+  (`levels_[i]` is the level at `min_price + i`). Locating a level is index
+  arithmetic: no tree walk, no hashing, no pointer chasing, and levels near
+  the mid sit next to each other in memory.
+- **One array serves both sides.** Between commands the book is never
+  crossed, so a tick holds a bid level or an ask level, never both. Each
+  level's `price` is filled in once at construction; "empty" means
+  `count == 0`. This halves memory compared with one array per side.
+  - The invariant is asserted on every insert. The differential tests
+    exercise it, especially for modifies that cross the spread.
+- **The cost moves to the next-best search.** When the best level empties,
+  the next one has to be found. Two strategies are chosen at compile time
+  (`BestSearch`), so they can be benchmarked against each other:
+  - **Bitmap:** a two-level occupancy bitmap per side. One bit per tick, plus
+    a summary bit per 64-bit word (one summary bit covers 4,096 ticks). A
+    search is one `countl_zero`/`countr_zero` in the current word; if that
+    word is empty, it jumps through the summary to the next non-zero word.
+    For a 1M-tick band the summary is 245 words (about 2 KB), effectively
+    always in L1. The worst case, an empty stretch, reads O(band / 4096)
+    summary words.
+  - **Linear:** walk the `Level` array tick by tick until a non-empty level
+    is found. It's O(gap), but each step is a sequential read the hardware
+    prefetcher can see coming.
+- The best level per side is cached, so `best()` is O(1). Inserting a better
+  level updates the cache; erasing the best triggers the search.
+- **Memory:** 32 B × band ticks for levels, plus about 1/256 of that for the
+  two bitmaps. The 1M-tick band in the `deep` config is 32 MB, all allocated
+  and touched at construction.
+- **A bounded band is a requirement.** The band is capped at 4M ticks
+  (`kMaxBandTicks`, 128 MB), and wider bands are rejected at construction.
+  Real venues enforce price bands too. A window that recentres as the price
+  drifts is listed as future work.
+  - Rejected for now: a circular window that recentres. It handles unbounded
+    drift, but adds wrap-around arithmetic to every index and a re-anchoring
+    operation, and the differential tests would need band-shift events.
+  - Rejected: a hash map from price to level. It loses the locality that
+    motivates design B in the first place.
+
+| Operation | Design A (`MapLevels`) | Design B (`ArrayLevels`) |
+|---|---|---|
+| best price | O(1) (cached leftmost node) | O(1) (cached index) |
+| find / create level | O(log L) tree walk + node alloc | O(1) index |
+| erase level | O(log L) | O(1) |
+| next best after erase | O(1) amortised (tree successor) | Bitmap: ~O(1); Linear: O(gap) |
+| cancel | O(1) unlink; O(log L) if the level empties | O(1); next-best search if it was the best |
+| memory | O(levels) | O(band width) |
+
+L is the number of occupied levels.
 
 ## Verification (M3)
 
@@ -282,6 +326,17 @@ in `dense` and `edge`.
 
 The harness is itself tested: an engine with a planted bug must be reported,
 with a reproduction line.
+
+**Results (M4, all engines):** `lob_fuzz --engine all --config all --seeds
+1-25 --ops 1000000` matched the reference on **300,000,000 commands**
+(100M per engine: map, array, array-scan; release, 64.6 s), plus 10.8M under
+ASan+UBSan. Three bugs were deliberately planted in design B to check that
+the tests catch them:
+- `find_prev` excluding its own slot: caught by unit tests and by the
+  differential tests;
+- the summary bit cleared too eagerly: caught by both;
+- the linear scan skipping tick 0: caught only by the differential tests,
+  via the `edge` config's band-edge prices.
 
 **Results (M3, design A):**
 - CI runs 12 cases × 200k commands = 2.4M per build, under release and

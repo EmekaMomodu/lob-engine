@@ -4,9 +4,9 @@ A low-latency limit order book and matching engine in C++20: price-time priority
 no heap allocation on the hot path, two benchmarked price-level designs, and
 differential testing against a deliberately simple reference implementation.
 
-> **Status: Milestone 3.** Design A (tree of price levels) is implemented, matches the
-> reference book on 100M+ random commands, and performs zero heap allocations after
-> construction. Design decisions: [docs/design.md](docs/design.md). Measured numbers,
+> **Status: Milestone 4.** Two optimized designs (A: tree of price levels, B: flat
+> tick-indexed array with an occupancy bitmap) match the reference book on 100M+ random
+> commands each and perform zero heap allocations after construction. Design decisions: [docs/design.md](docs/design.md). Measured numbers,
 > each with its hardware, flags and workload: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Building
@@ -78,7 +78,7 @@ docs/                 design decisions, benchmark log, raw results
 1. ✅ Architecture + repo skeleton
 2. ✅ Reference order book + full unit tests
 3. ✅ Optimized engine, design A (map-based levels) + differential tests
-4. Optimized engine, design B (flat tick array + occupancy bitmap) + differential tests
+4. ✅ Optimized engine, design B (flat tick array + occupancy bitmap) + differential tests
 5. Benchmark suite, latency histograms, A vs B comparison
 6. Profiling pass: hotspots fixed, before/after documented
 7. Final README: design doc, methodology, results, limitations, next steps
