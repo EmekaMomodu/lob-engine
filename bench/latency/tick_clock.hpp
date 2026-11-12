@@ -3,6 +3,7 @@
 // Low-overhead timestamps and thread placement for the latency harness.
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -94,7 +95,7 @@ inline std::string place_thread(int cpu) {
     }
     cpu_set_t set;
     CPU_ZERO(&set);
-    CPU_SET(cpu, &set);
+    CPU_SET(static_cast<std::size_t>(cpu), &set);
     if (pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0) {
         return "pinned to CPU " + std::to_string(cpu);
     }
