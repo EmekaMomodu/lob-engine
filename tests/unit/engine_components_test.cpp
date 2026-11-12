@@ -1,7 +1,10 @@
-// Unit tests for the engine's building blocks: IdMap, OrderPool, BlockArena.
+// Unit tests for the engine's building blocks: IdMap, OrderPool, BlockArena,
+// OccupancyBitmap, ArrayLevels.
 
+#include "lob/engine/array_levels.hpp"
 #include "lob/engine/block_arena.hpp"
 #include "lob/engine/id_map.hpp"
+#include "lob/engine/occupancy_bitmap.hpp"
 #include "lob/engine/order_pool.hpp"
 #include "lob/workload/rng.hpp"
 
@@ -11,6 +14,8 @@
 #include <cstdint>
 #include <map>
 #include <new>
+#include <set>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -155,6 +160,117 @@ TEST(ArenaAllocator, BacksStdMapUpToCapacity) {
     EXPECT_EQ(map.at(1000), 1);
     map.clear();
     EXPECT_EQ(arena.in_use(), 0U);
+}
+
+// --- OccupancyBitmap ----------------------------------------------------------
+
+// Randomised against std::set at sizes around word (64) and summary (4096)
+// boundaries, where off-by-one errors in the masks would show up.
+void fuzz_bitmap(std::size_t slots, std::uint64_t seed) {
+    OccupancyBitmap bits(slots);
+    std::set<std::size_t> model;
+    workload::Rng rng(seed);
+    const auto expected_prev = [&](std::size_t i) -> std::size_t {
+        const auto it = model.upper_bound(i);
+        return it == model.begin() ? OccupancyBitmap::kNpos : *std::prev(it);
+    };
+    const auto expected_next = [&](std::size_t i) -> std::size_t {
+        const auto it = model.lower_bound(i);
+        return it == model.end() ? OccupancyBitmap::kNpos : *it;
+    };
+    for (int step = 0; step < 50'000; ++step) {
+        const std::size_t i = rng.below(slots);
+        // Bias towards sparse sets so long empty stretches are common.
+        if (rng.below(100) < 40) {
+            bits.set(i);
+            model.insert(i);
+        } else {
+            bits.clear(i);
+            model.erase(i);
+        }
+        const std::size_t q = rng.below(slots);
+        ASSERT_EQ(bits.test(q), model.contains(q)) << "slots=" << slots << " step=" << step;
+        ASSERT_EQ(bits.find_prev(q), expected_prev(q)) << "slots=" << slots << " q=" << q;
+        ASSERT_EQ(bits.find_next(q), expected_next(q)) << "slots=" << slots << " q=" << q;
+        ASSERT_EQ(bits.find_prev(slots - 1), expected_prev(slots - 1));
+        ASSERT_EQ(bits.find_next(0), expected_next(0));
+    }
+}
+
+TEST(OccupancyBitmap, MatchesModelAcrossBoundarySizes) {
+    std::uint64_t seed = 1;
+    for (const std::size_t slots : {1U, 2U, 63U, 64U, 65U, 4095U, 4096U, 4097U, 70'000U}) {
+        fuzz_bitmap(slots, seed++);
+    }
+}
+
+TEST(OccupancyBitmap, EmptyAndSingleBit) {
+    OccupancyBitmap bits(10'000);
+    EXPECT_EQ(bits.find_prev(9'999), OccupancyBitmap::kNpos);
+    EXPECT_EQ(bits.find_next(0), OccupancyBitmap::kNpos);
+    bits.set(5'000);
+    EXPECT_EQ(bits.find_prev(9'999), 5'000U);
+    EXPECT_EQ(bits.find_prev(5'000), 5'000U);
+    EXPECT_EQ(bits.find_prev(4'999), OccupancyBitmap::kNpos);
+    EXPECT_EQ(bits.find_next(0), 5'000U);
+    EXPECT_EQ(bits.find_next(5'001), OccupancyBitmap::kNpos);
+    EXPECT_EQ(bits.find_next(10'000), OccupancyBitmap::kNpos);  // past the end
+}
+
+// --- ArrayLevels --------------------------------------------------------------
+
+template <class Levels>
+class ArrayLevelsTest : public ::testing::Test {};
+using ArrayLevelVariants =
+    ::testing::Types<ArrayLevels<BestSearch::Bitmap>, ArrayLevels<BestSearch::Linear>>;
+TYPED_TEST_SUITE(ArrayLevelsTest, ArrayLevelVariants);
+
+TYPED_TEST(ArrayLevelsTest, TracksBestLevelPerSideThroughInsertAndErase) {
+    TypeParam levels(BookConfig{.min_price = Price{100}, .max_price = Price{200}, .max_orders = 8});
+    EXPECT_EQ(levels.best(Side::Buy), kNoLevel);
+    EXPECT_EQ(levels.best(Side::Sell), kNoLevel);
+
+    const LevelRef b1 = levels.get_or_insert(Side::Buy, Price{110});
+    const LevelRef b2 = levels.get_or_insert(Side::Buy, Price{150});
+    const LevelRef a1 = levels.get_or_insert(Side::Sell, Price{190});
+    const LevelRef a2 = levels.get_or_insert(Side::Sell, Price{160});
+    for (const LevelRef ref : {b1, b2, a1, a2}) {
+        ++levels.at(ref).count;  // pretend an order rests there
+    }
+    EXPECT_EQ(levels.at(levels.best(Side::Buy)).price, Price{150});
+    EXPECT_EQ(levels.at(levels.best(Side::Sell)).price, Price{160});
+    EXPECT_EQ(levels.get_or_insert(Side::Buy, Price{150}), b2);  // existing level
+
+    for (const LevelRef ref : {b2, a2}) {  // empty the best levels
+        levels.at(ref).count = 0;
+        levels.erase(ref);
+    }
+    EXPECT_EQ(levels.at(levels.best(Side::Buy)).price, Price{110});
+    EXPECT_EQ(levels.at(levels.best(Side::Sell)).price, Price{190});
+
+    for (const LevelRef ref : {b1, a1}) {
+        levels.at(ref).count = 0;
+        levels.erase(ref);
+    }
+    EXPECT_EQ(levels.best(Side::Buy), kNoLevel);
+    EXPECT_EQ(levels.best(Side::Sell), kNoLevel);
+}
+
+TYPED_TEST(ArrayLevelsTest, BandEdgesMapToFirstAndLastSlot) {
+    TypeParam levels(BookConfig{.min_price = Price{-5}, .max_price = Price{5}, .max_orders = 4});
+    EXPECT_EQ(levels.get_or_insert(Side::Buy, Price{-5}), 0U);
+    EXPECT_EQ(levels.get_or_insert(Side::Sell, Price{5}), 10U);
+    EXPECT_EQ(levels.at(0).price, Price{-5});
+    EXPECT_EQ(levels.at(10).price, Price{5});
+}
+
+TYPED_TEST(ArrayLevelsTest, RejectsBandsThatAreTooWide) {
+    const auto too_wide = static_cast<std::int64_t>(kMaxBandTicks);
+    EXPECT_THROW(
+        TypeParam(BookConfig{.min_price = Price{0}, .max_price = Price{too_wide}, .max_orders = 1}),
+        std::invalid_argument);
+    EXPECT_NO_THROW(TypeParam(
+        BookConfig{.min_price = Price{0}, .max_price = Price{too_wide - 1}, .max_orders = 1}));
 }
 
 }  // namespace

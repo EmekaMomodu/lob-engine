@@ -186,20 +186,22 @@ void expect_no_allocations(const workload::GeneratorConfig& config, std::size_t 
 
 // Every named workload: covers rejects, sweeps, modifies, level create/erase,
 // capacity exhaustion and id reuse, all of which must stay allocation-free.
-TEST(NoAllocation, MapEngineDense) {
-    expect_no_allocations<MapEngine>(workload::dense_config(), 200'000);
+template <template <class> class Engine>
+void expect_no_allocations_all_workloads() {
+    for (const auto& config : workload::named_configs()) {
+        expect_no_allocations<Engine>(config, 200'000);
+    }
+    expect_no_allocations<Engine>(workload::replay_config(), 200'000);
 }
-TEST(NoAllocation, MapEngineDefault) {
-    expect_no_allocations<MapEngine>(workload::default_config(), 200'000);
+
+TEST(NoAllocation, MapEngine) {
+    expect_no_allocations_all_workloads<MapEngine>();
 }
-TEST(NoAllocation, MapEngineEdge) {
-    expect_no_allocations<MapEngine>(workload::edge_config(), 200'000);
+TEST(NoAllocation, ArrayEngine) {
+    expect_no_allocations_all_workloads<ArrayEngine>();
 }
-TEST(NoAllocation, MapEngineDeep) {
-    expect_no_allocations<MapEngine>(workload::deep_config(), 200'000);
-}
-TEST(NoAllocation, MapEngineReplay) {
-    expect_no_allocations<MapEngine>(workload::replay_config(), 200'000);
+TEST(NoAllocation, ArrayScanEngine) {
+    expect_no_allocations_all_workloads<ArrayScanEngine>();
 }
 
 }  // namespace

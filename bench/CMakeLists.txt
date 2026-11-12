@@ -13,3 +13,4 @@ function(lob_add_benchmark name)
 endfunction()
 
 lob_add_benchmark(lob_replay_bench SOURCES micro/replay_bench.cpp)
+lob_add_benchmark(lob_best_search_bench SOURCES micro/best_search_bench.cpp)

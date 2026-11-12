@@ -48,6 +48,20 @@ inline GeneratorConfig replay_config() {
     return c;
 }
 
+/// Same flow as replay_config, but resting orders spread thinly over a wide
+/// band: few orders per level and large gaps between occupied levels. This is
+/// the shape where finding the next best level is expensive for a linear scan.
+inline GeneratorConfig replay_sparse_config() {
+    GeneratorConfig c = replay_config();
+    c.name = "replay_sparse";
+    c.book =
+        BookConfig{.min_price = Price{1}, .max_price = Price{1'000'000}, .max_orders = 1U << 20U};
+    c.max_passive_offset = 5'000;
+    c.max_aggressive_offset = 20;
+    c.target_live_orders = 2'000;
+    return c;
+}
+
 struct Workload {
     GeneratorConfig config;
     std::uint64_t seed{};
