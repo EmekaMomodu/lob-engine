@@ -1,6 +1,10 @@
 # Third-party dependencies, pinned to exact release tarballs with SHA-256
 # hashes so every machine (laptop, Docker, CI) builds identical code.
 #
+# The tarballs are checked in under third_party/ (unmodified upstream release
+# archives), so configuring needs no network access. FetchContent still
+# verifies each hash before unpacking into the build tree.
+#
 # SYSTEM (CMake >= 3.25) marks their headers as system headers: our strict
 # warnings and clang-tidy never fire on third-party code.
 
@@ -10,7 +14,7 @@ set(FETCHCONTENT_QUIET ON)
 if(LOB_BUILD_TESTS)
   FetchContent_Declare(
     googletest
-    URL https://github.com/google/googletest/archive/refs/tags/v1.17.0.tar.gz
+    URL "${PROJECT_SOURCE_DIR}/third_party/googletest-1.17.0.tar.gz"
     URL_HASH SHA256=65fab701d9829d38cb77c14acdc431d2108bfdbf8979e40eb8ae567edf10b27c
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SYSTEM)
@@ -22,7 +26,7 @@ endif()
 if(LOB_BUILD_BENCHMARKS)
   FetchContent_Declare(
     benchmark
-    URL https://github.com/google/benchmark/archive/refs/tags/v1.9.4.tar.gz
+    URL "${PROJECT_SOURCE_DIR}/third_party/benchmark-1.9.4.tar.gz"
     URL_HASH SHA256=b334658edd35efcf06a99d9be21e4e93e092bd5f95074c1673d5c8705d95c104
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     SYSTEM)

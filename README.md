@@ -335,8 +335,9 @@ are listed in [docs/benchmarks.md](docs/benchmarks.md#m6-profiling-pass-hotspots
 ## Building and running
 
 Requirements: CMake >= 3.25, Ninja, and a C++20 compiler (Clang >= 18,
-GCC >= 14, Apple Clang >= 16). GoogleTest and Google Benchmark are fetched
-and pinned (SHA-256) automatically.
+GCC >= 14, Apple Clang >= 16). GoogleTest and Google Benchmark are vendored
+as pinned release tarballs in `third_party/` (SHA-256 checked at configure
+time), so the build needs no network access.
 
 ```bash
 cmake --workflow --preset release      # configure + build + all tests
@@ -403,6 +404,7 @@ workload/             deterministic generator, workload replay, differential dri
 tests/                unit/ (typed behaviour suite), differential/, alloc/ (zero-allocation check)
 tools/                lob_fuzz: long differential campaigns and failure reproduction
 bench/                Google Benchmark suites (micro/) and the per-op latency harness (latency/)
+third_party/          pinned GoogleTest and Google Benchmark release tarballs
 docker/               Linux build/profiling image
 docs/                 design.md (decision log), benchmarks.md (measurement log), results/ (raw data)
 ```
