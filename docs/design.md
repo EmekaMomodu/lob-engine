@@ -420,8 +420,9 @@ The matching core is single-threaded, for these reasons:
 ## Tooling choices
 
 - GoogleTest and Google Benchmark via `FetchContent`, pinned to exact release
-  tarballs with SHA-256 hashes. No system packages are needed, so every
-  machine builds identical code.
+  tarballs with SHA-256 hashes. The tarballs are checked in under
+  `third_party/`, so no system packages and no network access are needed, and
+  every machine builds identical code.
 - Sanitizers are applied globally, so the dependencies are instrumented too.
   Mixing instrumented and uninstrumented code gives false positives.
 - The `asan-ubsan` preset builds Debug at `-O1`: asserts stay on, and large

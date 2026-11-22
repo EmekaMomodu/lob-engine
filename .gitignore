@@ -1,5 +1,13 @@
-/build/
+/build*/
+/cmake-build-*/
 /out/
+# in-source configure/build leftovers
+/CMakeCache.txt
+/_deps/
+/Testing/
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
 /.cache/
 compile_commands.json
 .DS_Store
