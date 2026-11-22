@@ -334,8 +334,9 @@ are listed in [docs/benchmarks.md](docs/benchmarks.md#m6-profiling-pass-hotspots
 
 ## Building and running
 
-Requirements: CMake >= 3.25, Ninja, and a C++20 compiler (Clang >= 18,
-GCC >= 14, Apple Clang >= 16). GoogleTest and Google Benchmark are vendored
+Requirements: CMake >= 3.25 and a C++20 compiler (Clang >= 18, GCC >= 13,
+Apple Clang >= 16). The presets below use Ninja; without it, use the plain
+CMake commands further down. GoogleTest and Google Benchmark are vendored
 as pinned release tarballs in `third_party/` (SHA-256 checked at configure
 time), so the build needs no network access.
 
@@ -355,6 +356,14 @@ cmake --build build/release --target format-check  # CI formatting gate
 | `relwithdebinfo` | `-O3 -g -fno-omit-frame-pointer`; used for profiling |
 | `asan-ubsan` | `-O1 -g` + ASan + UBSan, asserts on |
 | `tidy` | Debug build with clang-tidy as a compile step |
+
+**Without Ninja** (CMake's default generator, e.g. Makefiles):
+
+```bash
+cmake -S . -B build/make -DCMAKE_BUILD_TYPE=Release
+cmake --build build/make -j 4
+ctest --test-dir build/make --output-on-failure -j 4
+```
 
 **Tests** (labels: `unit`, `differential`, `alloc`, `bench`):
 
